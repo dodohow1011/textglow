@@ -182,9 +182,6 @@ def train(num_gpus, rank, group_name, output_directory, log_directory, checkpoin
                 # For Data Parallel
                 mel_max_len = mel_tgt.size(1)
 
-            print (alignment_target.size())
-            print (src_seq.size())
-
             outputs = model(src_seq, src_pos, mel_tgt, audio, mel_max_len, alignment_target)
             _, _ , _, duration_predictor = outputs
             max_like, dur_loss = criterion(outputs, alignment_target, mel_tgt)

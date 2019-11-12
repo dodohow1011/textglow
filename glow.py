@@ -67,8 +67,6 @@ class WaveGlowLoss(nn.Module):
         alignment_tgt = alignment_tgt + 1
         alignment_tgt = torch.log(alignment_tgt)
         duration_predictor_loss = nn.MSELoss()(duration_predictor_output, alignment_tgt.squeeze())
-        mel_tgt.requires_grad = False
-        # mel_loss = nn.MSELoss()(mel_predict, mel_tgt)
         n = z.size(0)*z.size(1)*z.size(2)
         print ("{:3f}, {:3f}, {:3f}".format(duration_predictor_loss, log_s_total/n, log_det_W_total/n))
         return loss/(z.size(0)*z.size(1)*z.size(2)), duration_predictor_loss
@@ -227,6 +225,7 @@ class WaveGlow(nn.Module):
         if audio.size(0) >= 16000:
             max_audio_start = audio.size(0) - 16000
             audio_start = random.randint(0, max_audio_start)
+            print (audio_start)
             audio = audio[audio_start:audio_start+16000]
         else:
             audio = torch.nn.functional.pad(audio, (0, self.segment_length - audio.size(0)), 'constant').data
@@ -278,24 +277,6 @@ class WaveGlow(nn.Module):
         
         output_audio.append(audio)
 
-        '''mel_re = torch.cuda.FloatTensor(mel.size(0), mel.size(1), mel.size(2)).normal_()
-
-        for k in reversed(range(self.n_flows)):
-            n_half = int(mel_re.size(1)/2)
-            mel_0 = mel_re[:, :n_half, :]
-            mel_1 = mel_re[:, n_half:, :]
-
-            mel_output = self.WN[k]((mel_0, length_regulator_output))
-            s = mel_output[:, n_half:, :]
-            b = mel_output[:, :n_half, :]
-
-            mel_1 = (mel_1 - b)/torch.exp(s)
-            mel_re = torch.cat([mel_0, mel_1], 1)
-            
-            mel_re = self.convinv[k](mel_re, reverse=True)
-        
-        mel_re = mel_re.transpose(1, 2)'''
-
         return torch.cat(output_audio, 1), log_s_list, log_det_W_list, duration_predictor_output
 
     def inference(self, src_seq, src_pos, mel_max_length=None, length_target=None, sigma=1.0, alpha=1.0):
@@ -308,27 +289,52 @@ class WaveGlow(nn.Module):
             alpha,
             mel_max_length)
         
-        decoder_output = self.decoder(length_regulator_output, decoder_pos)
-        decoder_output = decoder_output.transpose(1, 2)
-        #decoder_output = length_regulator_output.transpose(1,2)
+        #decoder_output = self.decoder(length_regulator_output, decoder_pos)
+        #decoder_output = decoder_output.transpose(1, 2)
+        lr_output = length_regulator_output.transpose(1,2)
+
+        lr_output = self.upsample(lr_output)
+        time_cutoff = self.upsample.kernel[0] - self.upsample.stride[0]
+        lr_output = lr_output[:, :, :-time_cutoff]
+        lr_output = lr_output.unfold(2, 8, 8).permute(0, 2, 1, 3)
+        lr_output = lr_output.contiguous().view(lr_output.size(0), lr_output.size(1), -1).permute(0, 2, 1)
+
     
-        mel = torch.cuda.FloatTensor(enc_output.size(0), self.n_remaining_channels, decoder_output.size(2)).normal_()
-        mel = torch.autograd.Variable(sigma*mel)
+
+        if lr_output.type() == 'torch.cuda.HalfTensor':
+            audio = torch.cuda.HalfTensor(lr_output.size(0),
+                                          self.n_remaining_channels,
+                                          lr_output.size(2)).normal_()
+        else:
+            audio = torch.cuda.FloatTensor(lr_output.size(0),
+                                           self.n_remaining_channels,
+                                           output.size(2)).normal_()
+
+        audio = torch.autograd.Variable(sigma*audio)
 
         for k in reversed(range(self.n_flows)):
-            n_half = int(mel.size(1)/2)
-            mel_0 = mel[:,:n_half,:]
-            mel_1 = mel[:,n_half:,:]
+            n_half = int(audio.size(1)/2)
+            audio_0 = audio[:,:n_half,:]
+            audio_1 = audio[:,n_half:,:]
 
-            output = self.WN[k]((mel_0, decoder_output))
+            output = self.WN[k]((audio_0, lr_output))
+
             s = output[:, n_half:, :]
             b = output[:, :n_half, :]
-            mel_1 = (mel_1 - b)/torch.exp(s)
-            mel = torch.cat([mel_0, mel_1],1)
+            audio_1 = (audio_1 - b)/torch.exp(s)
+            audio = torch.cat([audio_0, audio_1],1)
 
-            mel = self.convinv[k](mel, reverse=True)
+            audio = self.convinv[k](audio, reverse=True)
 
-        return mel.permute(0,2,1).data
+            '''if k % self.n_early_every == 0 and k > 0:
+                if lr_output.type() == 'torch.cuda.HalfTensor':
+                    z = torch.cuda.HalfTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
+                else:
+                    z = torch.cuda.FloatTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
+                audio = torch.cat((sigma*z, audio),1)'''
+
+        audio = audio.permute(0,2,1).contiguous().view(audio.size(0), -1).data
+        return audio
 
     @staticmethod
     def remove_weightnorm(model):
