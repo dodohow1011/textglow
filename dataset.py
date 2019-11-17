@@ -56,8 +56,6 @@ class FastSpeechDataset(Dataset):
         D = np.load(os.path.join(hp.alignment_path, str(idx)+".npy"))
 
         character = self.texts[idx][0:len(self.texts[idx])]
-        print (character)
-        print (self.audios[idx])
         character = np.array(text_to_sequence(
             character, hp.text_cleaners))
 

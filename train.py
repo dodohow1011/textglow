@@ -184,7 +184,7 @@ def train(num_gpus, rank, group_name, output_directory, log_directory, checkpoin
 
             outputs = model(src_seq, src_pos, mel_tgt, audio, mel_max_len, alignment_target)
             _, _ , _, duration_predictor = outputs
-            max_like, dur_loss = criterion(outputs, alignment_target, mel_tgt)
+            max_like, dur_loss = criterion(outputs, alignment_target)
             # mel_loss = criterion(outputs, alignment_target, mel_tgt)
             loss = max_like + dur_loss
 

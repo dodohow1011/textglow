@@ -41,10 +41,10 @@ import random
 @torch.jit.script
 def fused_add_tanh_sigmoid_multiply(input_a, input_b, n_channels):
     n_channels_int = n_channels[0]
-    in_act = input_a+input_b
+    in_act = input_a + input_b
     t_act = torch.tanh(in_act[:, :n_channels_int, :])
     s_act = torch.sigmoid(in_act[:, n_channels_int:, :])
-    acts = t_act
+    acts = t_act * s_act
     return acts
 
 class WaveGlowLoss(nn.Module):
@@ -52,7 +52,7 @@ class WaveGlowLoss(nn.Module):
         super(WaveGlowLoss, self).__init__()
         self.sigma = sigma
 
-    def forward(self, model_output, alignment_tgt, mel_tgt):
+    def forward(self, model_output, alignment_tgt):
         z, log_s_list, log_det_W_list, duration_predictor_output = model_output
         for i, log_s in enumerate(log_s_list):
             if i == 0:
@@ -68,6 +68,8 @@ class WaveGlowLoss(nn.Module):
         alignment_tgt = torch.log(alignment_tgt)
         duration_predictor_loss = nn.MSELoss()(duration_predictor_output, alignment_tgt.squeeze())
         n = z.size(0)*z.size(1)*z.size(2)
+        print("{:3f}".format(torch.sum(z*z)/(2*self.sigma*self.sigma*n)))
+        #print(torch.mean(z))
         print ("{:3f}, {:3f}, {:3f}".format(duration_predictor_loss, log_s_total/n, log_det_W_total/n))
         return loss/(z.size(0)*z.size(1)*z.size(2)), duration_predictor_loss
 
@@ -176,8 +178,6 @@ class WN(torch.nn.Module):
                 spect[:,spect_offset:spect_offset+2*self.n_channels,:],
                 n_channels_tensor)
 
-            # acts = torch.tanh(self.in_layers[i](audio)+spect[:,spect_offset:spect_offset+self.n_channels,:])
-
             res_skip_acts = self.res_skip_layers[i](acts)
             if i < self.n_layers - 1:
                 audio = audio + res_skip_acts[:,:self.n_channels,:]
@@ -191,8 +191,8 @@ class WaveGlow(nn.Module):
     def __init__(self):
         super(WaveGlow, self).__init__()
 
-        self.upsample = torch.nn.ConvTranspose1d(256,
-                                                 256,
+        self.upsample = torch.nn.ConvTranspose1d(hp.word_vec_dim,
+                                                 hp.word_vec_dim,
                                                  1024, stride=256)
         self.n_flows = hp.n_flows
         self.n_early_every = hp.n_early_every
@@ -208,35 +208,28 @@ class WaveGlow(nn.Module):
         self.mel_linear = Linear(hp.decoder_output_size, hp.num_mels)
         
         self.n_layers = hp.n_layers
+        self.train_noise = []
+        n_half = int(hp.n_group/2)
 
         # Set up layers with the right sizes based on how many dimensions
         # have been output already
-        n_remaining_channels = 8
+        n_remaining_channels = hp.n_group
         for k in range(self.n_flows):
-            '''if k % self.n_early_every == 0 and k > 0:
-                n_remaining_channels = n_remaining_channels - self.n_early_size'''
+            if k % self.n_early_every == 0 and k > 0:
+                n_half = n_half - int(self.n_early_size/2)
+                n_remaining_channels = n_remaining_channels - self.n_early_size
             self.convinv.append(Invertible1x1Conv(n_remaining_channels))
-            self.WN.append(WN(n_remaining_channels//2, hp.word_vec_dim*8, hp.n_layers, hp.n_channels, hp.kernel_size))
+            self.WN.append(WN(n_half, hp.word_vec_dim*hp.n_group, hp.n_layers, hp.n_channels, hp.kernel_size))
         self.n_remaining_channels = n_remaining_channels  # Useful during inference
 
     def forward(self, src_seq, src_pos, mel, audio, mel_max_len=None, length_target=None, alpha=1.0):
-        # mel: B x D x T
-        # words: B x T
-        if audio.size(0) >= 16000:
-            max_audio_start = audio.size(0) - 16000
-            audio_start = random.randint(0, max_audio_start)
-            print (audio_start)
-            audio = audio[audio_start:audio_start+16000]
-        else:
-            audio = torch.nn.functional.pad(audio, (0, self.segment_length - audio.size(0)), 'constant').data
-        audio = audio.unsqueeze(0)
         
-        output_mel = []
         output_audio = []
         log_s_list = []
         log_det_W_list = []
 
 
+        audio = audio.unsqueeze(0)
         enc_output, _ = self.encoder(src_seq, src_pos)
         length_regulator_output, duration_predictor_output = self.length_regulator(
             enc_output,
@@ -244,20 +237,31 @@ class WaveGlow(nn.Module):
             length_target,
             mel_max_len)
 
-        mel = mel.transpose(1, 2)
         lr_output = length_regulator_output.transpose(1, 2)
         lr_output = self.upsample(lr_output)
+        
         assert(lr_output.size(2) > audio.size(1))
         if lr_output.size(2) > audio.size(1):
             lr_output = lr_output[:, :, :audio.size(1)]
 
-        lr_output = lr_output.unfold(2, 8, 8).permute(0, 2, 1, 3)
+        assert(lr_output.size(2) == audio.size(1))
+        
+        max_audio_start = audio.size(1) - 16000
+        audio_start = random.randint(0, max_audio_start)
+        audio = audio[:, audio_start:audio_start+16000]
+        lr_output = lr_output[:, :, audio_start:audio_start+16000]
+        
+
+        lr_output = lr_output.unfold(2, hp.n_group, hp.n_group).permute(0, 2, 1, 3)
         lr_output = lr_output.contiguous().view(lr_output.size(0), lr_output.size(1), -1).permute(0, 2, 1)
-        audio = audio.unfold(1, 8, 8).permute(0, 2, 1)
+        audio = audio.unfold(1, hp.n_group, hp.n_group).permute(0, 2, 1)
         #decoder_output = self.decoder(length_regulator_output, decoder_pos)
         #decoder_output = decoder_output.transpose(1, 2)
 
         for k in range(self.n_flows):
+            if k % self.n_early_every == 0 and k > 0:
+                output_audio.append(audio[:,:self.n_early_size,:])
+                audio = audio[:,self.n_early_size:,:]
 
             audio, log_det_W = self.convinv[k](audio)
             log_det_W_list.append(log_det_W)
@@ -280,26 +284,23 @@ class WaveGlow(nn.Module):
         return torch.cat(output_audio, 1), log_s_list, log_det_W_list, duration_predictor_output
 
     def inference(self, src_seq, src_pos, mel_max_length=None, length_target=None, sigma=1.0, alpha=1.0):
-
-        enc_output, enc_mask = self.encoder(src_seq, src_pos)
-        length_regulator_output, decoder_pos, _ = self.length_regulator(
+        
+        enc_output, _ = self.encoder(src_seq, src_pos)
+        length_regulator_output, duration_predictor_output = self.length_regulator(
             enc_output,
-            enc_mask,
-            length_target,
             alpha,
+            length_target,
             mel_max_length)
         
         #decoder_output = self.decoder(length_regulator_output, decoder_pos)
         #decoder_output = decoder_output.transpose(1, 2)
-        lr_output = length_regulator_output.transpose(1,2)
+        lr_output = length_regulator_output.transpose(1, 2)
 
         lr_output = self.upsample(lr_output)
-        time_cutoff = self.upsample.kernel[0] - self.upsample.stride[0]
+        time_cutoff = self.upsample.kernel_size[0] - self.upsample.stride[0]
         lr_output = lr_output[:, :, :-time_cutoff]
         lr_output = lr_output.unfold(2, 8, 8).permute(0, 2, 1, 3)
         lr_output = lr_output.contiguous().view(lr_output.size(0), lr_output.size(1), -1).permute(0, 2, 1)
-
-    
 
         if lr_output.type() == 'torch.cuda.HalfTensor':
             audio = torch.cuda.HalfTensor(lr_output.size(0),
@@ -308,9 +309,10 @@ class WaveGlow(nn.Module):
         else:
             audio = torch.cuda.FloatTensor(lr_output.size(0),
                                            self.n_remaining_channels,
-                                           output.size(2)).normal_()
+                                           lr_output.size(2)).normal_()
 
         audio = torch.autograd.Variable(sigma*audio)
+
 
         for k in reversed(range(self.n_flows)):
             n_half = int(audio.size(1)/2)
@@ -322,18 +324,18 @@ class WaveGlow(nn.Module):
             s = output[:, n_half:, :]
             b = output[:, :n_half, :]
             audio_1 = (audio_1 - b)/torch.exp(s)
-            audio = torch.cat([audio_0, audio_1],1)
+            audio = torch.cat([audio_0, audio_1], 1)
 
             audio = self.convinv[k](audio, reverse=True)
 
-            '''if k % self.n_early_every == 0 and k > 0:
+            if k % self.n_early_every == 0 and k > 0:
                 if lr_output.type() == 'torch.cuda.HalfTensor':
-                    z = torch.cuda.HalfTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
+                    z = torch.cuda.HalfTensor(lr_output.size(0), self.n_early_size, lr_output.size(2)).normal_()
                 else:
-                    z = torch.cuda.FloatTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
-                audio = torch.cat((sigma*z, audio),1)'''
-
-        audio = audio.permute(0,2,1).contiguous().view(audio.size(0), -1).data
+                    z = torch.cuda.FloatTensor(lr_output.size(0), self.n_early_size, lr_output.size(2)).normal_()
+                audio = torch.cat((sigma*z, audio),1)
+            print (torch.mean(audio))
+        audio = audio.permute(0, 2, 1).contiguous().view(audio.size(0), -1).data
         return audio
 
     @staticmethod
@@ -342,7 +344,7 @@ class WaveGlow(nn.Module):
         for WN in waveglow.WN:
             WN.start = nn.utils.remove_weight_norm(WN.start)
             WN.in_layers = remove(WN.in_layers)
-            WN.cond_layers = remove(WN.cond_layers)
+            WN.cond_layer = nn.utils.remove_weight_norm(WN.cond_layer)
             WN.res_skip_layers = remove(WN.res_skip_layers)
         return waveglow
 

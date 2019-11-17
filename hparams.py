@@ -17,36 +17,37 @@ text_cleaners = ['english_cleaners']
 
 # Model
 word_vec_dim = 256
-encoder_conv1d_filter_size = 1024
+encoder_conv1d_filter_size = 128
 encoder_n_layer = 6
 encoder_head = 2
 max_sep_len = 2048
 encoder_output_size = 256
 decoder_n_layer = 6
 decoder_head = 2
-decoder_conv1d_filter_size = 1024
+decoder_conv1d_filter_size = 128
 decoder_output_size = 256
 fft_conv1d_kernel = 3
 fft_conv1d_padding = 1
 duration_predictor_filter_size = 256
 duration_predictor_kernel_size = 3
 dropout = 0.1
+
 n_early_every = 4
 n_early_size = 2
 n_flows = 12
 n_layers = 8
+n_group = 8
 n_channels = 256
 kernel_size = 3
 
 # FFTBlock
 Head = 2
 N = 6
-d_model = 256
 
 # Train
 pre_target = True
 n_warm_up_step = 4000
-learning_rate = 1e-5
+learning_rate = 1e-4
 batch_size = 1
 epochs = 10000
 dataset_path = "dataset"
@@ -57,7 +58,7 @@ waveglow_path = "./model_waveglow"
 checkpoint_path = "./model_new"
 grad_clip_thresh = 1.0
 decay_step = [200000, 500000, 1000000]
-save_step = 2000
+save_step = 1000
 log_step = 10
 clear_Time = 20
 

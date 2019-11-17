@@ -82,6 +82,7 @@ class LengthRegulator(nn.Module):
             output = self.LR(x, target, mel_max_length=mel_max_length)
             return output, duration_predictor_output
         else:
+            print (2)
             for idx, ele in enumerate(duration_predictor_output[0]):
                 duration_predictor_output[0][idx] = self.rounding(ele)
             output = self.LR(x, duration_predictor_output, alpha)
@@ -96,7 +97,7 @@ class DurationPredictor(nn.Module):
     def __init__(self):
         super(DurationPredictor, self).__init__()
 
-        self.input_size = hp.d_model
+        self.input_size = hp.word_vec_dim
         self.filter_size = hp.duration_predictor_filter_size
         self.kernel = hp.duration_predictor_kernel_size
         self.conv_output_size = hp.duration_predictor_filter_size
