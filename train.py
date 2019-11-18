@@ -106,7 +106,7 @@ def train(num_gpus, rank, group_name, output_directory, log_directory, checkpoin
     #=====END:   ADDED FOR DISTRIBUTED======
 
     learning_rate = hp.learning_rate
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adadelta(model.parameters(), lr=learning_rate)
 
     if hp.fp16_run:
         from apex import amp
@@ -155,34 +155,28 @@ def train(num_gpus, rank, group_name, output_directory, log_directory, checkpoin
                 # Prepare Data
                 src_seq = data_of_batch["texts"]
                 src_pos = data_of_batch["pos"]
-                mel_tgt = data_of_batch["mels"]
 
                 src_seq = torch.from_numpy(src_seq).long().to(device)
                 src_pos = torch.from_numpy(src_pos).long().to(device)
-                mel_tgt = torch.from_numpy(mel_tgt).float().to(device)
                 alignment_target = get_alignment(
                     src_seq, tacotron2).float().to(device)
                 # For Data Parallel
-                mel_max_len = mel_tgt.size(1)
             
             else:
                 # Prepare Data
                 audio = data_of_batch["audios"]
                 src_seq = data_of_batch["texts"]
                 src_pos = data_of_batch["pos"]
-                mel_tgt = data_of_batch["mels"]
                 alignment_target = data_of_batch["alignment"]
 
                 audio = torch.cat(audio).to(device)
                 src_seq = torch.from_numpy(src_seq).long().to(device)
                 src_pos = torch.from_numpy(src_pos).long().to(device)
-                mel_tgt = torch.from_numpy(mel_tgt).float().to(device)
                 alignment_target = torch.from_numpy(
                     alignment_target).float().to(device)
                 # For Data Parallel
-                mel_max_len = mel_tgt.size(1)
 
-            outputs = model(src_seq, src_pos, mel_tgt, audio, mel_max_len, alignment_target)
+            outputs = model(src_seq, src_pos, audio, alignment_target)
             _, _ , _, duration_predictor = outputs
             max_like, dur_loss = criterion(outputs, alignment_target)
             # mel_loss = criterion(outputs, alignment_target, mel_tgt)

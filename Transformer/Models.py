@@ -143,3 +143,40 @@ class Decoder(nn.Module):
                 dec_slf_attn_list += [dec_slf_attn]
 
         return dec_output
+
+class DECBlock(nn.Module):
+    def __init__(self,
+                 len_max_seq=20000,
+                 d_input_vec=hp.encoder_output_size,
+                 n_layers=hp.decoder_n_layer,
+                 n_head=hp.decoder_head,
+                 d_k=64,
+                 d_v=64,
+                 d_model=hp.encoder_output_size,
+                 d_inner=hp.decoder_conv1d_filter_size,
+                 dropout=hp.dropout):
+
+        super(DECBlock, self).__init__()
+
+        n_position = len_max_seq + 1
+
+        self.position_enc = nn.Embedding.from_pretrained(
+            get_sinusoid_encoding_table(n_position, d_input_vec, padding_idx=0),
+            freeze=True)
+
+        self.layer_stack = nn.ModuleList([FFTBlock(
+            d_model, d_inner, n_head, d_k, d_v, dropout=dropout) for _ in range(n_layers)])
+    def forward(self, inputs, src_pos, return_attns=False):
+
+        enc_slf_attn_list = []
+        dec_output = inputs.transpose(1, 2) + self.position_enc(src_pos)
+        mask = torch.zeros(dec_output.size(0), dec_output.size(1), dec_output.size(1)).bool().cuda()
+
+        for dec_layer in self.layer_stack:
+            dec_output, enc_slf_attn = dec_layer(
+                dec_output,
+                non_pad_mask=None,
+                slf_attn_mask=mask)
+            if return_attns:
+                enc_slf_attn_list += [enc_slf_attn]
+        return dec_output.transpose(1,2)

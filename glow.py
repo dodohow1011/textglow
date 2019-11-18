@@ -25,12 +25,13 @@
 #
 # *****************************************************************************
 import copy
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
 
-from Transformer.Models import Encoder, Decoder
+from Transformer.Models import Encoder, Decoder, DECBlock
 from Transformer.Layers import Linear, PostNet
 from modules import LengthRegulator
 import hparams as hp
@@ -201,7 +202,7 @@ class WaveGlow(nn.Module):
         # model parameters
         self.encoder = Encoder()
         self.length_regulator = LengthRegulator()
-        self.decoder = Decoder()
+        self.decoder = DECBlock()
         self.WN = torch.nn.ModuleList()
         self.convinv = nn.ModuleList()
 
@@ -222,7 +223,7 @@ class WaveGlow(nn.Module):
             self.WN.append(WN(n_half, hp.word_vec_dim*hp.n_group, hp.n_layers, hp.n_channels, hp.kernel_size))
         self.n_remaining_channels = n_remaining_channels  # Useful during inference
 
-    def forward(self, src_seq, src_pos, mel, audio, mel_max_len=None, length_target=None, alpha=1.0):
+    def forward(self, src_seq, src_pos, audio, length_target=None, alpha=1.0):
         
         output_audio = []
         log_s_list = []
@@ -235,10 +236,11 @@ class WaveGlow(nn.Module):
             enc_output,
             alpha,
             length_target,
-            mel_max_len)
+            None)
 
         lr_output = length_regulator_output.transpose(1, 2)
         lr_output = self.upsample(lr_output)
+
         
         assert(lr_output.size(2) > audio.size(1))
         if lr_output.size(2) > audio.size(1):
@@ -246,11 +248,13 @@ class WaveGlow(nn.Module):
 
         assert(lr_output.size(2) == audio.size(1))
         
-        max_audio_start = audio.size(1) - 16000
+        max_audio_start = audio.size(1) - 12000
         audio_start = random.randint(0, max_audio_start)
-        audio = audio[:, audio_start:audio_start+16000]
-        lr_output = lr_output[:, :, audio_start:audio_start+16000]
-        
+        audio = audio[:, audio_start:audio_start+12000]
+        lr_output = lr_output[:, :, audio_start:audio_start+12000]
+        dec_pos = np.arange(lr_output.size(2))
+        dec_pos = torch.from_numpy(dec_pos).long().cuda().unsqueeze(0)
+        lr_output = self.decoder(lr_output, dec_pos)
 
         lr_output = lr_output.unfold(2, hp.n_group, hp.n_group).permute(0, 2, 1, 3)
         lr_output = lr_output.contiguous().view(lr_output.size(0), lr_output.size(1), -1).permute(0, 2, 1)

@@ -17,14 +17,14 @@ text_cleaners = ['english_cleaners']
 
 # Model
 word_vec_dim = 256
-encoder_conv1d_filter_size = 128
-encoder_n_layer = 6
+encoder_conv1d_filter_size = 512
+encoder_n_layer = 3
 encoder_head = 2
 max_sep_len = 2048
 encoder_output_size = 256
-decoder_n_layer = 6
-decoder_head = 2
-decoder_conv1d_filter_size = 128
+decoder_n_layer = 1
+decoder_head = 1
+decoder_conv1d_filter_size = 64
 decoder_output_size = 256
 fft_conv1d_kernel = 3
 fft_conv1d_padding = 1
@@ -47,7 +47,7 @@ N = 6
 # Train
 pre_target = True
 n_warm_up_step = 4000
-learning_rate = 1e-4
+learning_rate = 1e-2
 batch_size = 1
 epochs = 10000
 dataset_path = "dataset"

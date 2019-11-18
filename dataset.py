@@ -50,46 +50,42 @@ class FastSpeechDataset(Dataset):
         return len(self.texts)
 
     def __getitem__(self, idx):
-        mel_gt_name = os.path.join(
-            hp.mel_ground_truth, "ljspeech-mel-%05d.npy" % (idx+1))
-        mel_gt_target = np.load(mel_gt_name)
+        #mel_gt_name = os.path.join(
+        #    hp.mel_ground_truth, "ljspeech-mel-%05d.npy" % (idx+1))
+        #mel_gt_target = np.load(mel_gt_name)
         D = np.load(os.path.join(hp.alignment_path, str(idx)+".npy"))
 
         character = self.texts[idx][0:len(self.texts[idx])]
         character = np.array(text_to_sequence(
             character, hp.text_cleaners))
 
-        filename = os.path.join('../FastSpeech/data/LJSpeech-1.1/wavs', self.audios[idx] + '.wav')
+        filename = os.path.join('../waveglow/LJSpeech-1.1/wavs', self.audios[idx] + '.wav')
         audio, sampling_rate = load_wav_to_torch(filename)
         audio = audio / MAX_WAV_VALUE
 
         sample = {"audio": audio,
                   "texts": character,
-                  "mel_target": mel_gt_target,
                   "D": D}
 
         return sample
 
 def collate_fn(batch):
     texts = [d['texts'] for d in batch]
-    mels = [d['mel_target'] for d in batch]
     audio = [d['audio'] for d in batch]
 
     if not hp.pre_target:
 
         texts, pos_padded = pad_text(texts)
-        mels = pad_mel(mels)
 
-        return {"audios": audios, "texts": texts, "pos": pos_padded, "mels": mels}
+        return {"audios": audios, "texts": texts, "pos": pos_padded}
     
     else:
         alignment_target = [d["D"] for d in batch]
 
         texts, pos_padded = pad_text(texts)
         alignment_target = pad_alignment(alignment_target)
-        mels = pad_mel(mels)
 
-        return {"audios": audio, "texts": texts, "pos": pos_padded, "mels": mels, "alignment": alignment_target}
+        return {"audios": audio, "texts": texts, "pos": pos_padded, "alignment": alignment_target}
 
 
 def pad_text(inputs):
