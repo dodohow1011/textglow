@@ -170,7 +170,7 @@ class DECBlock(nn.Module):
 
         enc_slf_attn_list = []
         dec_output = inputs.transpose(1, 2) + self.position_enc(src_pos)
-        mask = torch.zeros(dec_output.size(0), dec_output.size(1), dec_output.size(1)).bool().cuda()
+        mask = torch.zeros(dec_output.size(0), dec_output.size(1), dec_output.size(1)).byte().cuda()
 
         for dec_layer in self.layer_stack:
             dec_output, enc_slf_attn = dec_layer(

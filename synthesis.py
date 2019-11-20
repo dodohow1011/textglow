@@ -26,7 +26,7 @@ if __name__ == "__main__":
     torch.manual_seed(hp.seed)
     torch.cuda.manual_seed(hp.seed)
     model = WaveGlow().cuda()
-    checkpoint = torch.load('256emb12flow/TTSglow_92000')
+    checkpoint = torch.load('test/TTSglow_67000')
     model.load_state_dict(checkpoint['model'].state_dict())
     model =  model.remove_weightnorm(model)
 
@@ -37,7 +37,7 @@ if __name__ == "__main__":
                                 collate_fn=collate_fn,
                                 drop_last=True,
                                 num_workers=4)
-    model = model.eval()
+    model = model.train()
 
     for i, data_of_batch in enumerate(testing_loader):
         audio_tgt = data_of_batch["audios"]

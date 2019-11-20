@@ -192,8 +192,8 @@ class WaveGlow(nn.Module):
     def __init__(self):
         super(WaveGlow, self).__init__()
 
-        self.upsample = torch.nn.ConvTranspose1d(hp.word_vec_dim,
-                                                 hp.word_vec_dim,
+        self.upsample = torch.nn.ConvTranspose1d(hp.num_mels,
+                                                 hp.num_mels,
                                                  1024, stride=256)
         self.n_flows = hp.n_flows
         self.n_early_every = hp.n_early_every
@@ -202,7 +202,8 @@ class WaveGlow(nn.Module):
         # model parameters
         self.encoder = Encoder()
         self.length_regulator = LengthRegulator()
-        self.decoder = DECBlock()
+        self.decoder = Decoder()
+        self.linear = Linear(hp.decoder_output_size, hp.num_mels)
         self.WN = torch.nn.ModuleList()
         self.convinv = nn.ModuleList()
 
@@ -220,10 +221,10 @@ class WaveGlow(nn.Module):
                 n_half = n_half - int(self.n_early_size/2)
                 n_remaining_channels = n_remaining_channels - self.n_early_size
             self.convinv.append(Invertible1x1Conv(n_remaining_channels))
-            self.WN.append(WN(n_half, hp.word_vec_dim*hp.n_group, hp.n_layers, hp.n_channels, hp.kernel_size))
+            self.WN.append(WN(n_half, hp.num_mels*hp.n_group, hp.n_layers, hp.n_channels, hp.kernel_size))
         self.n_remaining_channels = n_remaining_channels  # Useful during inference
 
-    def forward(self, src_seq, src_pos, audio, length_target=None, alpha=1.0):
+    def forward(self, src_seq, src_pos, audio, mel_max_length=None, length_target=None, alpha=1.0):
         
         output_audio = []
         log_s_list = []
@@ -236,9 +237,14 @@ class WaveGlow(nn.Module):
             enc_output,
             alpha,
             length_target,
-            None)
+            mel_max_length)
 
-        lr_output = length_regulator_output.transpose(1, 2)
+        dec_pos = np.arange(1, length_regulator_output.size(1)+1)
+        dec_pos = torch.from_numpy(dec_pos).long().cuda().unsqueeze(0)
+        decoder_output = self.decoder(length_regulator_output, dec_pos)
+        decoder_output = self.linear(decoder_output)
+
+        lr_output = decoder_output.transpose(1, 2)
         lr_output = self.upsample(lr_output)
 
         
@@ -248,19 +254,14 @@ class WaveGlow(nn.Module):
 
         assert(lr_output.size(2) == audio.size(1))
         
-        max_audio_start = audio.size(1) - 12000
+        max_audio_start = audio.size(1) - 16000
         audio_start = random.randint(0, max_audio_start)
-        audio = audio[:, audio_start:audio_start+12000]
-        lr_output = lr_output[:, :, audio_start:audio_start+12000]
-        dec_pos = np.arange(lr_output.size(2))
-        dec_pos = torch.from_numpy(dec_pos).long().cuda().unsqueeze(0)
-        lr_output = self.decoder(lr_output, dec_pos)
+        audio = audio[:, audio_start:audio_start+16000]
+        lr_output = lr_output[:, :, audio_start:audio_start+16000]
 
         lr_output = lr_output.unfold(2, hp.n_group, hp.n_group).permute(0, 2, 1, 3)
         lr_output = lr_output.contiguous().view(lr_output.size(0), lr_output.size(1), -1).permute(0, 2, 1)
         audio = audio.unfold(1, hp.n_group, hp.n_group).permute(0, 2, 1)
-        #decoder_output = self.decoder(length_regulator_output, decoder_pos)
-        #decoder_output = decoder_output.transpose(1, 2)
 
         for k in range(self.n_flows):
             if k % self.n_early_every == 0 and k > 0:
@@ -296,9 +297,11 @@ class WaveGlow(nn.Module):
             length_target,
             mel_max_length)
         
-        #decoder_output = self.decoder(length_regulator_output, decoder_pos)
-        #decoder_output = decoder_output.transpose(1, 2)
-        lr_output = length_regulator_output.transpose(1, 2)
+        dec_pos = np.arange(1, length_regulator_output.size(1)+1)
+        dec_pos = torch.from_numpy(dec_pos).long().cuda().unsqueeze(0)
+        decoder_output = self.decoder(length_regulator_output, dec_pos)
+        decoder_output = self.linear(decoder_output)
+        lr_output = decoder_output.transpose(1, 2)
 
         lr_output = self.upsample(lr_output)
         time_cutoff = self.upsample.kernel_size[0] - self.upsample.stride[0]
@@ -338,7 +341,7 @@ class WaveGlow(nn.Module):
                 else:
                     z = torch.cuda.FloatTensor(lr_output.size(0), self.n_early_size, lr_output.size(2)).normal_()
                 audio = torch.cat((sigma*z, audio),1)
-            print (torch.mean(audio))
+        
         audio = audio.permute(0, 2, 1).contiguous().view(audio.size(0), -1).data
         return audio
 
